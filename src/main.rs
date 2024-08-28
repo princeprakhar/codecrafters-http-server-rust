@@ -8,7 +8,7 @@ fn main() {
     // Uncomment this block to pass the first stage
     //
     let listener = TcpListener::bind("127.0.0.1:4221").unwrap();
-    
+     
     for stream in listener.incoming() {
         match stream {
             Ok(_stream) => {
