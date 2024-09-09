@@ -1,7 +1,7 @@
 // use core::str;
 #[allow(unused_imports)]
-use std::io::{Read, Write};
-use std::{io::BufReader, net::TcpListener};
+use std::io::{Read, Write, BufRead}; // Import BufRead trait
+use std::{io::BufReader, net::{TcpListener, TcpStream}};
 
 fn handle_the_connection(mut stream: TcpStream) {
     // Do something with the stream
@@ -26,8 +26,7 @@ fn main() {
     for stream in listener.incoming() {
         match stream {
             Ok(mut _stream) => {
-                println!("accepted new connection");
-                _stream.write("HTTP/1.1 200 OK\r\n\r\n".as_bytes()).expect("200 \n Hello, From prakhar deep");
+                handle_the_connection(_stream);
             }
             Err(e) => {
                 println!("error: {}", e);
