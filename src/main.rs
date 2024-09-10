@@ -8,11 +8,24 @@ fn handle_the_connection(mut stream: TcpStream) {
     let buf_reader = BufReader::new(&mut stream);
     let response = "HTTP/1.1 200 OK\r\n\r\n";
     let request_line = buf_reader.lines().next().unwrap().unwrap();
-    let response = match request_line.as_str() {
-        "GET / HTTP/1.1" => "HTTP/1.1 200 OK\r\n\r\n",
-        _ => "HTTP/1.1 404 Not Found\r\n\r\n",
-    };
-    stream.write_all(response.as_bytes()).unwrap();
+    for line in request_line.split("\r\n") {
+        let header: Vec<&str> = line.split(" ").collect();
+        // println!("TEST: {}", &header[1][6..]);
+        if header[0] == "GET" {
+            if header[1] == "/" {
+                stream
+                    .write(response.as_bytes())
+                    .expect("200");
+            } else if &header[1][..6] == "/echo/" {
+                let response = format!("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-length: {}\r\n\r\n{}", header[1][6..].len(), &header[1][6..]);
+                stream.write(response.as_bytes()).expect("200");
+            } else {
+                stream
+                    .write("HTTP/1.1 404 Not Found\r\n\r\n".as_bytes())
+                    .expect("404");
+            }
+        }
+    }
 }
 
 fn main() {
