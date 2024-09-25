@@ -12,6 +12,20 @@ fn handle_connection(mut stream: TcpStream, directory: &str) {
         return;
     }
 
+    let mut headers = String::new();
+    let mut user_agent = String::new();
+
+    loop {
+        let mut header = String::new();
+        if buf_reader.read_line(&mut header).is_err() || header == "\r\n" {
+            break;
+        }
+        if header.starts_with("User-Agent:") {
+            user_agent = header[12..].trim().to_string();
+        }
+        headers.push_str(&header);
+    }
+
     let request_parts: Vec<&str> = request_line.trim().split_whitespace().collect();
     if request_parts.len() < 2 {
         stream.write_all(b"HTTP/1.1 400 Bad Request\r\n\r\n").unwrap();
@@ -34,10 +48,6 @@ fn handle_connection(mut stream: TcpStream, directory: &str) {
                     )
                 },
                 "/user-agent" => {
-                    let user_agent = request_parts.iter()
-                        .find(|&&header| header.starts_with("User-Agent:"))
-                        .map(|&header| &header[12..])
-                        .unwrap_or("");
                     format!(
                         "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
                         user_agent.len(),
