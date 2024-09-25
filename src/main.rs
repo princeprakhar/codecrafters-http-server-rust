@@ -23,7 +23,12 @@ fn handle_connection(mut stream: TcpStream, directory: &str) {
 
     match method {
         "GET" => {
-            if path.starts_with("/files/") {
+            if path == "/" {
+                // Handle the root path with a simple 200 OK response
+                let response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 13\r\n\r\nHello, world!";
+                stream.write_all(response.as_bytes()).unwrap();
+            }
+            else if path.starts_with("/files/") {
                 let filename = &path[7..];
                 let file_path = Path::new(directory).join(filename);
                 if file_path.exists() {
