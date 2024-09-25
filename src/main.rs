@@ -2,6 +2,7 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
+use std::thread;
 
 fn handle_connection(mut stream: TcpStream, directory: &str) {
     let mut buf_reader = BufReader::new(&mut stream);
@@ -9,24 +10,6 @@ fn handle_connection(mut stream: TcpStream, directory: &str) {
 
     if buf_reader.read_line(&mut request_line).is_err() {
         return;
-    }
-
-    let mut headers = String::new();
-    let mut content_length = 0;
-    let mut user_agent = String::new();
-    
-    loop {
-        let mut header = String::new();
-        if buf_reader.read_line(&mut header).is_err() || header == "\r\n" {
-            break;
-        }
-        headers.push_str(&header);
-        if header.starts_with("Content-Length:") {
-            content_length = header[16..].trim().parse::<usize>().unwrap_or(0);
-        }
-        if header.starts_with("User-Agent:") {
-            user_agent = header[12..].trim().to_string();
-        }
     }
 
     let request_parts: Vec<&str> = request_line.trim().split_whitespace().collect();
@@ -41,7 +24,7 @@ fn handle_connection(mut stream: TcpStream, directory: &str) {
     match method {
         "GET" => {
             let response = match path {
-                "/" => "HTTP/1.1 200 OK\r\n\r\nWelcome to the server!".to_string(),
+                "/" => "HTTP/1.1 200 OK\r\n\r\n".to_string(),
                 path if path.starts_with("/echo/") => {
                     let message = &path[6..];
                     format!(
@@ -50,11 +33,17 @@ fn handle_connection(mut stream: TcpStream, directory: &str) {
                         message
                     )
                 },
-                "/user-agent" => format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
-                    user_agent.len(),
-                    user_agent
-                ),
+                "/user-agent" => {
+                    let user_agent = request_parts.iter()
+                        .find(|&&header| header.starts_with("User-Agent:"))
+                        .map(|&header| &header[12..])
+                        .unwrap_or("");
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
+                        user_agent.len(),
+                        user_agent
+                    )
+                },
                 path if path.starts_with("/files/") => {
                     let filename = &path[7..];
                     let file_path = format!("{}/{}", directory, filename);
@@ -79,10 +68,12 @@ fn handle_connection(mut stream: TcpStream, directory: &str) {
                 let filename = &path[7..];
                 let file_path = format!("{}/{}", directory, filename);
 
+                let mut content = Vec::new();
+                buf_reader.read_to_end(&mut content).unwrap();
+
                 match File::create(&file_path) {
                     Ok(mut file) => {
-                        let mut buffer = vec![0; content_length];
-                        if buf_reader.read_exact(&mut buffer).is_ok() && file.write_all(&buffer).is_ok() {
+                        if file.write_all(&content).is_ok() {
                             stream.write_all(b"HTTP/1.1 201 Created\r\n\r\n").unwrap();
                         } else {
                             stream.write_all(b"HTTP/1.1 500 Internal Server Error\r\n\r\n").unwrap();
@@ -111,12 +102,13 @@ fn main() {
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
-                handle_connection(stream, directory);
+                let directory_clone = directory.to_string();
+                thread::spawn(move || {
+                    handle_connection(stream, &directory_clone);
+                });
             }
             Err(e) => {
                 eprintln!("Error: {}", e);
-
-                
             }
         }
     }
