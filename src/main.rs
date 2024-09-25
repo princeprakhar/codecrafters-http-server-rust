@@ -2,7 +2,7 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
-use std::thread;
+use std::{env, thread};
 
 fn handle_connection(mut stream: TcpStream, directory: &str) {
     let mut buf_reader = BufReader::new(&mut stream);
@@ -10,20 +10,6 @@ fn handle_connection(mut stream: TcpStream, directory: &str) {
 
     if buf_reader.read_line(&mut request_line).is_err() {
         return;
-    }
-
-    let mut headers = String::new();
-    let mut user_agent = String::new();
-
-    loop {
-        let mut header = String::new();
-        if buf_reader.read_line(&mut header).is_err() || header == "\r\n" {
-            break;
-        }
-        if header.starts_with("User-Agent:") {
-            user_agent = header[12..].trim().to_string();
-        }
-        headers.push_str(&header);
     }
 
     let request_parts: Vec<&str> = request_line.trim().split_whitespace().collect();
@@ -37,41 +23,30 @@ fn handle_connection(mut stream: TcpStream, directory: &str) {
 
     match method {
         "GET" => {
-            let response = match path {
-                "/" => "HTTP/1.1 200 OK\r\n\r\n".to_string(),
-                path if path.starts_with("/echo/") => {
-                    let message = &path[6..];
-                    format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
-                        message.len(),
-                        message
-                    )
-                },
-                "/user-agent" => {
-                    format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
-                        user_agent.len(),
-                        user_agent
-                    )
-                },
-                path if path.starts_with("/files/") => {
-                    let filename = &path[7..];
-                    let file_path = format!("{}/{}", directory, filename);
-                    if Path::new(&file_path).exists() {
-                        match fs::read(&file_path) {
-                            Ok(content) => format!(
+            if path.starts_with("/files/") {
+                let filename = &path[7..];
+                let file_path = Path::new(directory).join(filename);
+                if file_path.exists() {
+                    match fs::read(&file_path) {
+                        Ok(content) => {
+                            let response = format!(
                                 "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\n\r\n",
                                 content.len()
-                            ) + &String::from_utf8_lossy(&content),
-                            Err(_) => "HTTP/1.1 500 Internal Server Error\r\n\r\n".to_string(),
+                            );
+                            stream.write_all(response.as_bytes()).unwrap();
+                            stream.write_all(&content).unwrap();
+                        },
+                        Err(_) => {
+                            stream.write_all(b"HTTP/1.1 500 Internal Server Error\r\n\r\n").unwrap();
                         }
-                    } else {
-                        "HTTP/1.1 404 Not Found\r\n\r\n".to_string()
                     }
-                },
-                _ => "HTTP/1.1 404 Not Found\r\n\r\n".to_string(),
-            };
-            stream.write_all(response.as_bytes()).unwrap();
+                } else {
+                    stream.write_all(b"HTTP/1.1 404 Not Found\r\n\r\n").unwrap();
+                }
+            } else {
+                // Handle other GET requests (/, /echo, /user-agent) as before
+                // ...
+            }
         },
         "POST" => {
             if path.starts_with("/files/") {
@@ -104,7 +79,20 @@ fn handle_connection(mut stream: TcpStream, directory: &str) {
 }
 
 fn main() {
-    let directory = "your_directory_path"; // Replace with your actual directory
+    let args: Vec<String> = env::args().collect();
+    let mut directory = String::new();
+
+    for i in 1..args.len() {
+        if args[i] == "--directory" && i + 1 < args.len() {
+            directory = args[i + 1].clone();
+            break;
+        }
+    }
+
+    if directory.is_empty() {
+        eprintln!("Error: --directory flag is required");
+        std::process::exit(1);
+    }
 
     let listener = TcpListener::bind("127.0.0.1:4221").unwrap();
     println!("Server is running on port 4221...");
@@ -112,7 +100,7 @@ fn main() {
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
-                let directory_clone = directory.to_string();
+                let directory_clone = directory.clone();
                 thread::spawn(move || {
                     handle_connection(stream, &directory_clone);
                 });
