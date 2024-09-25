@@ -44,8 +44,6 @@ fn handle_connection(mut stream: TcpStream, directory: &str) {
                     stream.write_all(b"HTTP/1.1 404 Not Found\r\n\r\n").unwrap();
                 }
             } else {
-                // Handle other GET requests (/, /echo, /user-agent) as before
-                // ...
                 stream.write_all(b"HTTP/1.1 404 Not Found\r\n\r\n").unwrap();
             }
         },
@@ -90,9 +88,10 @@ fn main() {
         }
     }
 
+    // Provide a default directory if --directory flag is missing
     if directory.is_empty() {
-        eprintln!("Error: --directory flag is required");
-        std::process::exit(1);
+        directory = "/tmp".to_string();  // Default to /tmp directory
+        println!("Warning: --directory flag not provided, defaulting to /tmp");
     }
 
     let listener = TcpListener::bind("127.0.0.1:4221").unwrap();
