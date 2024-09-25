@@ -49,7 +49,12 @@ fn handle_connection(mut stream: TcpStream, directory: &str) {
                             stream.write_all(b"HTTP/1.1 500 Internal Server Error\r\n\r\n").unwrap();
                         }
                     }
-                } else {
+                } 
+                else if(path.starts_with("/user-agent")){
+                    let response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 13\r\n\r\nHello, world!";
+                    stream.write_all(response.as_bytes()).unwrap();
+                }
+                else {
                     stream.write_all(b"HTTP/1.1 404 Not Found\r\n\r\n").unwrap();
                 }
             } else {
