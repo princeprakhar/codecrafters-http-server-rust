@@ -46,6 +46,7 @@ fn handle_connection(mut stream: TcpStream, directory: &str) {
             } else {
                 // Handle other GET requests (/, /echo, /user-agent) as before
                 // ...
+                stream.write_all(b"HTTP/1.1 404 Not Found\r\n\r\n").unwrap();
             }
         },
         "POST" => {
