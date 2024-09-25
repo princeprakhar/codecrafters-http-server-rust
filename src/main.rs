@@ -3,12 +3,14 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 use std::{env, thread};
+use mime_guess;
 
 fn handle_connection(mut stream: TcpStream, directory: &str) {
     let mut buf_reader = BufReader::new(&mut stream);
     let mut request_line = String::new();
 
-    if buf_reader.read_line(&mut request_line).is_err() {
+    if let Err(e) = buf_reader.read_line(&mut request_line) {
+        eprintln!("Failed to read request line: {}", e);
         return;
     }
 
@@ -24,24 +26,26 @@ fn handle_connection(mut stream: TcpStream, directory: &str) {
     match method {
         "GET" => {
             if path == "/" {
-                // Handle the root path with a simple 200 OK response
                 let response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 13\r\n\r\nHello, world!";
                 stream.write_all(response.as_bytes()).unwrap();
-            }
-            else if path.starts_with("/files/") {
+            } else if path.starts_with("/files/") {
                 let filename = &path[7..];
                 let file_path = Path::new(directory).join(filename);
+
                 if file_path.exists() {
                     match fs::read(&file_path) {
                         Ok(content) => {
+                            let mime_type = mime_guess::from_path(&file_path).first_or_octet_stream();
                             let response = format!(
-                                "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\n\r\n",
+                                "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\n\r\n",
+                                mime_type,
                                 content.len()
                             );
                             stream.write_all(response.as_bytes()).unwrap();
                             stream.write_all(&content).unwrap();
                         },
-                        Err(_) => {
+                        Err(e) => {
+                            eprintln!("Failed to read file {}: {}", file_path.display(), e);
                             stream.write_all(b"HTTP/1.1 500 Internal Server Error\r\n\r\n").unwrap();
                         }
                     }
@@ -58,7 +62,11 @@ fn handle_connection(mut stream: TcpStream, directory: &str) {
                 let file_path = format!("{}/{}", directory, filename);
 
                 let mut content = Vec::new();
-                buf_reader.read_to_end(&mut content).unwrap();
+                if let Err(e) = buf_reader.read_to_end(&mut content) {
+                    eprintln!("Failed to read POST body: {}", e);
+                    stream.write_all(b"HTTP/1.1 500 Internal Server Error\r\n\r\n").unwrap();
+                    return;
+                }
 
                 match File::create(&file_path) {
                     Ok(mut file) => {
@@ -68,7 +76,8 @@ fn handle_connection(mut stream: TcpStream, directory: &str) {
                             stream.write_all(b"HTTP/1.1 500 Internal Server Error\r\n\r\n").unwrap();
                         }
                     },
-                    Err(_) => {
+                    Err(e) => {
+                        eprintln!("Failed to create file {}: {}", file_path, e);
                         stream.write_all(b"HTTP/1.1 500 Internal Server Error\r\n\r\n").unwrap();
                     }
                 }
@@ -97,6 +106,11 @@ fn main() {
     if directory.is_empty() {
         directory = "/tmp".to_string();  // Default to /tmp directory
         println!("Warning: --directory flag not provided, defaulting to /tmp");
+    }
+
+    if let Err(e) = fs::create_dir_all(&directory) {
+        eprintln!("Failed to create directory {}: {}", directory, e);
+        return;
     }
 
     let listener = TcpListener::bind("127.0.0.1:4221").unwrap();
