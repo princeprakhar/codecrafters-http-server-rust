@@ -4,12 +4,32 @@ use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 use std::{env, thread};
 
+fn supports_gzip(headers: &[String]) -> bool {
+    headers.iter().any(|header| {
+        header.to_lowercase().starts_with("accept-encoding") && 
+        header.to_lowercase().contains("gzip")
+    })
+}
+
 fn handle_connection(mut stream: TcpStream, directory: &str) {
     let mut buf_reader = BufReader::new(&mut stream);
     let mut request_line = String::new();
+    let mut headers = Vec::new();
 
     if buf_reader.read_line(&mut request_line).is_err() {
         return;
+    }
+
+    // Read headers
+    loop {
+        let mut header = String::new();
+        if buf_reader.read_line(&mut header).is_err() {
+            return;
+        }
+        if header == "\r\n" {
+            break;
+        }
+        headers.push(header.trim().to_string());
     }
 
     let request_parts: Vec<&str> = request_line.trim().split_whitespace().collect();
@@ -21,35 +41,46 @@ fn handle_connection(mut stream: TcpStream, directory: &str) {
     let method = request_parts[0];
     let path = request_parts[1];
 
+    let gzip_supported = supports_gzip(&headers);
+
     match method {
         "GET" => {
             if path == "/" {
                 stream.write_all(b"HTTP/1.1 200 OK\r\n\r\n").unwrap();
             } else if path.starts_with("/echo/") {
                 let echo_content = &path[6..];
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
-                    echo_content.len(),
-                    echo_content
-                );
+                let response = if gzip_supported {
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Encoding: gzip\r\nContent-Length: {}\r\n\r\n{}",
+                        echo_content.len(),
+                        echo_content
+                    )
+                } else {
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
+                        echo_content.len(),
+                        echo_content
+                    )
+                };
                 stream.write_all(response.as_bytes()).unwrap();
             } else if path == "/user-agent" {
-                let mut user_agent = String::new();
-                for line in buf_reader.lines() {
-                    let line = line.unwrap();
-                    if line.starts_with("User-Agent: ") {
-                        user_agent = line[12..].to_string();
-                        break;
-                    }
-                    if line.is_empty() {
-                        break;
-                    }
-                }
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
-                    user_agent.len(),
-                    user_agent
-                );
+                let user_agent = headers.iter()
+                    .find(|h| h.starts_with("User-Agent: "))
+                    .map(|h| &h[12..])
+                    .unwrap_or("");
+                let response = if gzip_supported {
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Encoding: gzip\r\nContent-Length: {}\r\n\r\n{}",
+                        user_agent.len(),
+                        user_agent
+                    )
+                } else {
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
+                        user_agent.len(),
+                        user_agent
+                    )
+                };
                 stream.write_all(response.as_bytes()).unwrap();
             } else if path.starts_with("/files/") {
                 let filename = &path[7..];
@@ -57,10 +88,17 @@ fn handle_connection(mut stream: TcpStream, directory: &str) {
                 if file_path.exists() {
                     match fs::read(&file_path) {
                         Ok(content) => {
-                            let response = format!(
-                                "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\n\r\n",
-                                content.len()
-                            );
+                            let response = if gzip_supported {
+                                format!(
+                                    "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Encoding: gzip\r\nContent-Length: {}\r\n\r\n",
+                                    content.len()
+                                )
+                            } else {
+                                format!(
+                                    "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\n\r\n",
+                                    content.len()
+                                )
+                            };
                             stream.write_all(response.as_bytes()).unwrap();
                             stream.write_all(&content).unwrap();
                         },
@@ -80,17 +118,11 @@ fn handle_connection(mut stream: TcpStream, directory: &str) {
                 let filename = &path[7..];
                 let file_path = Path::new(directory).join(filename);
 
-                // Read headers
-                let mut content_length = 0;
-                for line in buf_reader.by_ref().lines() {
-                    let line = line.unwrap();
-                    if line.starts_with("Content-Length: ") {
-                        content_length = line[16..].parse::<usize>().unwrap_or(0);
-                    }
-                    if line.is_empty() {
-                        break;
-                    }
-                }
+                // Read content length
+                let content_length = headers.iter()
+                    .find(|h| h.starts_with("Content-Length: "))
+                    .and_then(|h| h[16..].parse::<usize>().ok())
+                    .unwrap_or(0);
 
                 // Read the request body
                 let mut content = vec![0; content_length];
@@ -150,6 +182,5 @@ fn main() {
                 eprintln!("Error: {}", e);
             }
         }
-
     }
 }
