@@ -3,15 +3,12 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 use std::{env, thread};
-use mime_guess;
 
 fn handle_connection(mut stream: TcpStream, directory: &str) {
     let mut buf_reader = BufReader::new(&mut stream);
     let mut request_line = String::new();
 
-    // Reading the request line
-    if let Err(e) = buf_reader.read_line(&mut request_line) {
-        eprintln!("Failed to read request line: {}", e);
+    if buf_reader.read_line(&mut request_line).is_err() {
         return;
     }
 
@@ -25,68 +22,66 @@ fn handle_connection(mut stream: TcpStream, directory: &str) {
     let path = request_parts[1];
 
     match method {
-        // Handle GET requests
         "GET" => {
             if path == "/" {
-                let response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 13\r\n\r\nHello, world!";
+                stream.write_all(b"HTTP/1.1 200 OK\r\n\r\n").unwrap();
+            } else if path.starts_with("/echo/") {
+                let echo_content = &path[6..];
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
+                    echo_content.len(),
+                    echo_content
+                );
+                stream.write_all(response.as_bytes()).unwrap();
+            } else if path == "/user-agent" {
+                let mut user_agent = String::new();
+                for line in buf_reader.lines() {
+                    let line = line.unwrap();
+                    if line.starts_with("User-Agent: ") {
+                        user_agent = line[12..].to_string();
+                        break;
+                    }
+                    if line.is_empty() {
+                        break;
+                    }
+                }
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
+                    user_agent.len(),
+                    user_agent
+                );
                 stream.write_all(response.as_bytes()).unwrap();
             } else if path.starts_with("/files/") {
                 let filename = &path[7..];
                 let file_path = Path::new(directory).join(filename);
-
                 if file_path.exists() {
                     match fs::read(&file_path) {
                         Ok(content) => {
-                            let mime_type = mime_guess::from_path(&file_path).first_or_octet_stream();
                             let response = format!(
-                                "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\n\r\n",
-                                mime_type,
+                                "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\n\r\n",
                                 content.len()
                             );
                             stream.write_all(response.as_bytes()).unwrap();
                             stream.write_all(&content).unwrap();
                         },
-                        Err(e) => {
-                            eprintln!("Failed to read file {}: {}", file_path.display(), e);
+                        Err(_) => {
                             stream.write_all(b"HTTP/1.1 500 Internal Server Error\r\n\r\n").unwrap();
                         }
                     }
                 } else {
                     stream.write_all(b"HTTP/1.1 404 Not Found\r\n\r\n").unwrap();
                 }
-            } else if path.starts_with("/user-agent") {
-                // Echo the User-Agent header
-                let mut headers = String::new();
-                if buf_reader.read_line(&mut headers).is_ok() {
-                    if headers.starts_with("User-Agent:") {
-                        let user_agent = headers.trim_start_matches("User-Agent: ").trim();
-                        let response = format!(
-                            "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
-                            user_agent.len(),
-                            user_agent
-                        );
-                        stream.write_all(response.as_bytes()).unwrap();
-                    }
-                } else {
-                    stream.write_all(b"HTTP/1.1 400 Bad Request\r\n\r\n").unwrap();
-                }
             } else {
                 stream.write_all(b"HTTP/1.1 404 Not Found\r\n\r\n").unwrap();
             }
         },
-
-        // Handle POST requests
         "POST" => {
             if path.starts_with("/files/") {
                 let filename = &path[7..];
                 let file_path = format!("{}/{}", directory, filename);
 
                 let mut content = Vec::new();
-                if let Err(e) = buf_reader.read_to_end(&mut content) {
-                    eprintln!("Failed to read POST body: {}", e);
-                    stream.write_all(b"HTTP/1.1 500 Internal Server Error\r\n\r\n").unwrap();
-                    return;
-                }
+                buf_reader.read_to_end(&mut content).unwrap();
 
                 match File::create(&file_path) {
                     Ok(mut file) => {
@@ -96,8 +91,7 @@ fn handle_connection(mut stream: TcpStream, directory: &str) {
                             stream.write_all(b"HTTP/1.1 500 Internal Server Error\r\n\r\n").unwrap();
                         }
                     },
-                    Err(e) => {
-                        eprintln!("Failed to create file {}: {}", file_path, e);
+                    Err(_) => {
                         stream.write_all(b"HTTP/1.1 500 Internal Server Error\r\n\r\n").unwrap();
                     }
                 }
@@ -113,9 +107,8 @@ fn handle_connection(mut stream: TcpStream, directory: &str) {
 
 fn main() {
     let args: Vec<String> = env::args().collect();
-    let mut directory = String::new();
+    let mut directory = String::from(".");  // Default to current directory
 
-    // Parsing the --directory flag
     for i in 1..args.len() {
         if args[i] == "--directory" && i + 1 < args.len() {
             directory = args[i + 1].clone();
@@ -123,17 +116,7 @@ fn main() {
         }
     }
 
-    // Provide a default directory if --directory flag is missing
-    if directory.is_empty() {
-        directory = "/tmp".to_string();  // Default to /tmp directory
-        println!("Warning: --directory flag not provided, defaulting to /tmp");
-    }
-
-    // Ensure directory exists
-    if let Err(e) = fs::create_dir_all(&directory) {
-        eprintln!("Failed to create directory {}: {}", directory, e);
-        return;
-    }
+    println!("Using directory: {}", directory);
 
     let listener = TcpListener::bind("127.0.0.1:4221").unwrap();
     println!("Server is running on port 4221...");
