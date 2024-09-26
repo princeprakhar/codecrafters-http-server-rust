@@ -3,12 +3,20 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 use std::{env, thread};
+use flate2::write::GzEncoder;
+use flate2::Compression;
 
 fn supports_gzip(headers: &[String]) -> bool {
     headers.iter().any(|header| {
         header.to_lowercase().starts_with("accept-encoding") && 
         header.to_lowercase().contains("gzip")
     })
+}
+
+fn gzip_compress(content: &[u8]) -> Vec<u8> {
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(content).unwrap();
+    encoder.finish().unwrap()
 }
 
 fn handle_connection(mut stream: TcpStream, directory: &str) {
@@ -49,58 +57,74 @@ fn handle_connection(mut stream: TcpStream, directory: &str) {
                 stream.write_all(b"HTTP/1.1 200 OK\r\n\r\n").unwrap();
             } else if path.starts_with("/echo/") {
                 let echo_content = &path[6..];
+                let response_body = if gzip_supported {
+                    gzip_compress(echo_content.as_bytes())
+                } else {
+                    echo_content.as_bytes().to_vec()
+                };
+                
                 let response = if gzip_supported {
                     format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Encoding: gzip\r\nContent-Length: {}\r\n\r\n{}",
-                        echo_content.len(),
-                        echo_content
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Encoding: gzip\r\nContent-Length: {}\r\n\r\n",
+                        response_body.len()
                     )
                 } else {
                     format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
-                        echo_content.len(),
-                        echo_content
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n",
+                        response_body.len()
                     )
                 };
                 stream.write_all(response.as_bytes()).unwrap();
+                stream.write_all(&response_body).unwrap();
             } else if path == "/user-agent" {
                 let user_agent = headers.iter()
                     .find(|h| h.starts_with("User-Agent: "))
                     .map(|h| &h[12..])
                     .unwrap_or("");
+                let response_body = if gzip_supported {
+                    gzip_compress(user_agent.as_bytes())
+                } else {
+                    user_agent.as_bytes().to_vec()
+                };
+                
                 let response = if gzip_supported {
                     format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Encoding: gzip\r\nContent-Length: {}\r\n\r\n{}",
-                        user_agent.len(),
-                        user_agent
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Encoding: gzip\r\nContent-Length: {}\r\n\r\n",
+                        response_body.len()
                     )
                 } else {
                     format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
-                        user_agent.len(),
-                        user_agent
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n",
+                        response_body.len()
                     )
                 };
                 stream.write_all(response.as_bytes()).unwrap();
+                stream.write_all(&response_body).unwrap();
             } else if path.starts_with("/files/") {
                 let filename = &path[7..];
                 let file_path = Path::new(directory).join(filename);
                 if file_path.exists() {
                     match fs::read(&file_path) {
                         Ok(content) => {
+                            let response_body = if gzip_supported {
+                                gzip_compress(&content)
+                            } else {
+                                content
+                            };
+                            
                             let response = if gzip_supported {
                                 format!(
                                     "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Encoding: gzip\r\nContent-Length: {}\r\n\r\n",
-                                    content.len()
+                                    response_body.len()
                                 )
                             } else {
                                 format!(
                                     "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\n\r\n",
-                                    content.len()
+                                    response_body.len()
                                 )
                             };
                             stream.write_all(response.as_bytes()).unwrap();
-                            stream.write_all(&content).unwrap();
+                            stream.write_all(&response_body).unwrap();
                         },
                         Err(_) => {
                             stream.write_all(b"HTTP/1.1 500 Internal Server Error\r\n\r\n").unwrap();
