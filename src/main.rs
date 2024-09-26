@@ -78,11 +78,28 @@ fn handle_connection(mut stream: TcpStream, directory: &str) {
         "POST" => {
             if path.starts_with("/files/") {
                 let filename = &path[7..];
-                let file_path = format!("{}/{}", directory, filename);
+                let file_path = Path::new(directory).join(filename);
 
-                let mut content = Vec::new();
-                buf_reader.read_to_end(&mut content).unwrap();
+                // Read headers
+                let mut content_length = 0;
+                for line in buf_reader.by_ref().lines() {
+                    let line = line.unwrap();
+                    if line.starts_with("Content-Length: ") {
+                        content_length = line[16..].parse::<usize>().unwrap_or(0);
+                    }
+                    if line.is_empty() {
+                        break;
+                    }
+                }
 
+                // Read the request body
+                let mut content = vec![0; content_length];
+                if buf_reader.read_exact(&mut content).is_err() {
+                    stream.write_all(b"HTTP/1.1 400 Bad Request\r\n\r\n").unwrap();
+                    return;
+                }
+
+                // Write content to file
                 match File::create(&file_path) {
                     Ok(mut file) => {
                         if file.write_all(&content).is_ok() {
@@ -133,6 +150,6 @@ fn main() {
                 eprintln!("Error: {}", e);
             }
         }
-        
+
     }
 }
